@@ -8,18 +8,30 @@
 #include <unistd.h>
 
 #define MAX_LEN 512
-#define MESSAGGIO_HELP "Sono disponibili i seguenti comandi:\r\n!help --> mostra l'elenco dei comandi disponibili\r\n!mode {txt|bin} --> imposta il modo di trasferimento dei files (testo o binario)\r\n!get filename nome_locale --> richiede al server il nome del file <filename> e lo salva localmente con il nome <nome_locale>\r\n!quit --> termina il client\r\n"
 #define COMMAND_LEN 512
 
+#define TXTMODE 1
+#define BINMODE 2
 
 #define RED   "\x1B[31m"
 #define GRN   "\x1B[32m"
 #define YEL   "\x1B[33m"
 #define BLU   "\x1B[34m"
-#define MAG   "\x1B[35m"
 #define CYN   "\x1B[36m"
-#define WHT   "\x1B[37m"
 #define RESET "\x1B[0m"
+
+void printCommandList()
+{
+	printf("Sono disponibili i seguenti comandi:\n");
+	printf(BLU "help" RESET);
+	printf(" --> mostra l'elenco dei comandi disponibili\n");
+	printf(BLU "!mode {txt|bin}" RESET);
+	printf(" --> imposta il modo di trasferimento dei files (testo o binario)\n");
+	printf(BLU "!get filename nome_locale" RESET);
+	printf(" --> richiede al server il nome del file <filename> e lo salva localmente con il nome <nome_locale>\n");
+	printf(BLU "!quit" RESET);
+	printf(" --> termina il client\n");
+}
 
 
 bool startsWith(const char *str, const char *pre)
@@ -44,7 +56,23 @@ int getWordCount(const char * command)
 	return count;
 }
 
-int main(int argc, char* argv[]){
+struct client_request {
+	char * filename;
+	char * localname;
+	uint8_t mode;
+};
+
+int main(int argc, char* argv[])
+{
+
+	// Check number of arguments
+	if(argc < 3) {
+		printf(RED "Errore: il numero di argomenti non e' sufficiente.\n" RESET);
+		return -1;
+	}
+
+	char* ip_server = argv[1];
+	char* porta_server = argv[2];
 
 	char command[COMMAND_LEN];
 
@@ -60,19 +88,25 @@ int main(int argc, char* argv[]){
 	char get_command[COMMAND_LEN];
 	strcpy(get_command, "!get");
 
+	// Initialise client struct
+	client_request client;
+	client.mode = 0;
 
 
-	printf("%s", MESSAGGIO_HELP);
+	printCommandList();
 
 
 	while(true) {
 
 		fgets(command, COMMAND_LEN, stdin);
 
+		// !help COMMAND
 		if(strcmp(command, help_command) == 0) {
-			printf("%s", MESSAGGIO_HELP);
+			printCommandList();
 			continue;
 		}
+
+		// !mode COMMAND
 		if(startsWith(command, mode_command)){
 			char* command_words[2];
 			int index = 0;
@@ -88,11 +122,13 @@ int main(int argc, char* argv[]){
 				words = strtok(NULL, " ");
 			}
 			if(strcmp(command_words[1], "txt\n") == 0){
-				printf(BLU "Set mode to txt\n" RESET);
+				client.mode = TXTMODE;
+				printf(GRN "Modo di trasferimento testuale configurato\n" RESET);
 				continue;
 
 			} else if (strcmp(command_words[1], "bin\n") == 0){
-				printf(BLU "Set mode to bin\n" RESET);
+				client.mode = BINMODE;
+				printf(GRN "Modo di trasferimento binario configurato\n" RESET);
 				continue;
 			} else {
 				printf(RED "Invalid command\n" RESET);
@@ -101,10 +137,7 @@ int main(int argc, char* argv[]){
 			continue;
 		}
 
-
-
-
-
+		// !get COMMAND
 		if(startsWith(command, get_command)){
 			char* command_words[3];
 			int index = 0;
@@ -119,17 +152,22 @@ int main(int argc, char* argv[]){
 				index++;
 				words = strtok(NULL, " ");
 			}
-			printf("%s\n", command_words[2]);
+			client.filename = command_words[1];
+			client.localname = command_words[2];
+			if(client.mode == 0) {
+				printf(YEL "Attenzione: il metodo di trasferimento non e' stato ancora configurato\n" RESET);
+				continue;
+			}
 			
 		}
 
+		// !quit COMMAND
 		if(strcmp(command, quit_command) == 0){
 			break;
 		}
 
 
 	}
-	
 	return 0;
 }
 
