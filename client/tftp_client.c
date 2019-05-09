@@ -20,6 +20,14 @@
 #define CYN   "\x1B[36m"
 #define RESET "\x1B[0m"
 
+
+
+struct client_request {
+	char * filename;
+	char * localname;
+	uint8_t mode;
+};
+
 void printCommandList()
 {
 	printf("Sono disponibili i seguenti comandi:\n");
@@ -56,23 +64,55 @@ int getWordCount(const char * command)
 	return count;
 }
 
-struct client_request {
-	char * filename;
-	char * localname;
-	uint8_t mode;
-};
+void receiveFile(client_request cl, int sd, sockaddr_in srv_addr) 
+{
+	int ret;
+	const char* fileToReceive = cl.filename;
+	ret = sendto(sd, fileToReceive, sizeof(fileToReceive), 0,
+            (struct sockaddr*)&srv_addr, sizeof(srv_addr));
+    close(sd);
+}
+
 
 int main(int argc, char* argv[])
 {
-
 	// Check number of arguments
 	if(argc < 3) {
 		printf(RED "Errore: il numero di argomenti non e' sufficiente.\n" RESET);
 		return -1;
 	}
 
-	char* ip_server = argv[1];
-	char* porta_server = argv[2];
+	const char* ip_server = argv[1];
+	int porta_server = atoi(argv[2]);
+	
+    int ret, sd, len;
+    struct sockaddr_in srv_addr, my_addr;
+    
+    /* Creazione socket */
+    sd = socket(AF_INET,SOCK_DGRAM,0);
+    
+    /* Creazione indirizzo di bind */
+    memset(&my_addr, 0, sizeof(my_addr)); // Pulizia 
+    my_addr.sin_family = AF_INET;
+    my_addr.sin_port = htons(4243);
+    my_addr.sin_addr.s_addr = INADDR_ANY;
+
+
+    ret = bind(sd, (struct sockaddr*)&my_addr, sizeof(my_addr) );
+    
+    if( ret < 0 ){
+        perror(RED "Bind non riuscita\n" RESET);
+        exit(0);
+    }
+    
+    
+    /* Creazione indirizzo del server */
+    memset(&srv_addr, 0, sizeof(srv_addr)); // Pulizia 
+    srv_addr.sin_family = AF_INET;
+    srv_addr.sin_port = htons(porta_server);
+    inet_pton(AF_INET, ip_server, &srv_addr.sin_addr);
+
+
 
 	char command[COMMAND_LEN];
 
@@ -90,7 +130,7 @@ int main(int argc, char* argv[])
 
 	// Initialise client struct
 	client_request client;
-	client.mode = 0;
+	client.mode = BINMODE;
 
 
 	printCommandList();
@@ -154,11 +194,8 @@ int main(int argc, char* argv[])
 			}
 			client.filename = command_words[1];
 			client.localname = command_words[2];
-			if(client.mode == 0) {
-				printf(YEL "Attenzione: il metodo di trasferimento non e' stato ancora configurato\n" RESET);
-				continue;
-			}
-			
+			receiveFile(client, sd, srv_addr);
+				
 		}
 
 		// !quit COMMAND
