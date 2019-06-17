@@ -13,6 +13,13 @@
 #define TXTMODE 1
 #define BINMODE 2
 
+
+#define DATA_LENGTH 512
+#define BUF_LEN 516 // Data length + 4 bytes 
+#define FILENAME_SIZE 100
+#define MODE_SIZE 10
+
+
 #define RRW 1
 #define WRQ 2
 #define DTA 3
@@ -26,9 +33,35 @@
 #define CYN   "\x1B[36m"
 #define RESET "\x1B[0m"
 
-#define PORT 4341
+#define PORT 7567
 
 
+
+struct DataPacket {
+	uint16_t opcode;
+	uint16_t blockNumber;
+	char data[DATA_LENGTH];
+};
+
+struct AckPacket {
+	uint16_t opcode;
+	uint16_t blockNumber;
+};
+
+struct ErrorPacket {
+	uint16_t opcode;
+	uint16_t errorNumber;
+	char errorMessage[DATA_LENGTH];
+	uint8_t zeroByte;
+};
+
+struct RequestPacket{
+	uint16_t opcode;
+	char filename[FILENAME_SIZE];
+	uint8_t zeroByteCode;
+	char mode[MODE_SIZE];
+	uint8_t zeroByteMode;
+};
 
 struct client_request {
 	char * filename;
@@ -74,28 +107,23 @@ int getWordCount(const char * command)
 
 void sendFileRequest(client_request cl, int sd, sockaddr_in srv_addr) 
 {
-
-	char buffer[MAX_LEN];
-	uint16_t opcode = htons(RRW);
-	int pos = 0;
-
+	
 	int ret;
-	const char* fileToReceive = cl.filename;
 
-	memcpy(buffer+pos, &opcode, sizeof(opcode));
-	pos += sizeof(opcode);
+	const char* mode = (cl.mode == TXTMODE) ? "netascii" : "octet";
+	
+	RequestPacket request;
 
-	strcpy(buffer+pos, fileToReceive);
-	pos += strlen(fileToReceive) + 1;
+	request.opcode = htons(RRW);
 
-	const char* mode = (cl.mode == TXTMODE) ? "netascii\0" : "octet\0";
-	strcpy(buffer+pos, mode);
-	pos += strlen(mode) + 1;
+	strcpy(request.filename, cl.filename);
+	strcpy(request.mode, mode);
+	request.zeroByteCode = 0x00;
+	request.zeroByteMode = 0x00;
 
-	printf("Blocco inviato: %s\n", buffer);
-
-	ret = sendto(sd, buffer, pos, 0,
+	ret = sendto(sd, (char*) &request, sizeof(request), 0,
             (struct sockaddr*)&srv_addr, sizeof(srv_addr));
+	printf("Blocco inviato\n");
 
 }
 
@@ -232,7 +260,7 @@ int main(int argc, char* argv[])
 			uint16_t opcode;
 			memcpy(&opcode, buffer, sizeof(opcode));
 			opcode = ntohs(opcode);
-			printf("Code %d\n", opcode);
+			printf("Code %d\n", opcode); 
 			close(sd);
 				
 		}
