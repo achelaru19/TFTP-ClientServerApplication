@@ -13,12 +13,20 @@
 #define TXTMODE 1
 #define BINMODE 2
 
+#define RRW 1
+#define WRQ 2
+#define DTA 3
+#define ACK 4
+#define ERR 5
+
 #define RED   "\x1B[31m"
 #define GRN   "\x1B[32m"
 #define YEL   "\x1B[33m"
 #define BLU   "\x1B[34m"
 #define CYN   "\x1B[36m"
 #define RESET "\x1B[0m"
+
+#define PORT 4341
 
 
 
@@ -64,13 +72,31 @@ int getWordCount(const char * command)
 	return count;
 }
 
-void receiveFile(client_request cl, int sd, sockaddr_in srv_addr) 
+void sendFileRequest(client_request cl, int sd, sockaddr_in srv_addr) 
 {
+
+	char buffer[MAX_LEN];
+	uint16_t opcode = htons(RRW);
+	int pos = 0;
+
 	int ret;
 	const char* fileToReceive = cl.filename;
-	ret = sendto(sd, fileToReceive, sizeof(fileToReceive), 0,
+
+	memcpy(buffer+pos, &opcode, sizeof(opcode));
+	pos += sizeof(opcode);
+
+	strcpy(buffer+pos, fileToReceive);
+	pos += strlen(fileToReceive) + 1;
+
+	const char* mode = (cl.mode == TXTMODE) ? "netascii\0" : "octet\0";
+	strcpy(buffer+pos, mode);
+	pos += strlen(mode) + 1;
+
+	printf("Blocco inviato: %s\n", buffer);
+
+	ret = sendto(sd, buffer, pos, 0,
             (struct sockaddr*)&srv_addr, sizeof(srv_addr));
-    close(sd);
+
 }
 
 
@@ -87,14 +113,20 @@ int main(int argc, char* argv[])
 	
     int ret, sd, len;
     struct sockaddr_in srv_addr, my_addr;
+	struct sockaddr_in connecting_addr;
+	socklen_t addrlen; 
     
+	// Pulizia
+	memset(&srv_addr, 0, sizeof(srv_addr));
+    memset(&my_addr, 0, sizeof(my_addr)); 
+	memset(&connecting_addr, 0, sizeof(connecting_addr));
+
     /* Creazione socket */
     sd = socket(AF_INET,SOCK_DGRAM,0);
     
     /* Creazione indirizzo di bind */
-    memset(&my_addr, 0, sizeof(my_addr)); // Pulizia 
     my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(4243);
+    my_addr.sin_port = htons(PORT);
     my_addr.sin_addr.s_addr = INADDR_ANY;
 
 
@@ -140,13 +172,13 @@ int main(int argc, char* argv[])
 
 		fgets(command, COMMAND_LEN, stdin);
 
-		// !help COMMAND
+		// !help 
 		if(strcmp(command, help_command) == 0) {
 			printCommandList();
 			continue;
 		}
 
-		// !mode COMMAND
+		// !mode 
 		if(startsWith(command, mode_command)){
 			char* command_words[2];
 			int index = 0;
@@ -177,7 +209,7 @@ int main(int argc, char* argv[])
 			continue;
 		}
 
-		// !get COMMAND
+		// !get 
 		if(startsWith(command, get_command)){
 			char* command_words[3];
 			int index = 0;
@@ -194,11 +226,18 @@ int main(int argc, char* argv[])
 			}
 			client.filename = command_words[1];
 			client.localname = command_words[2];
-			receiveFile(client, sd, srv_addr);
+			sendFileRequest(client, sd, srv_addr);
+			char buffer[512];
+			ret = recvfrom(sd, buffer, 512, 0, (struct sockaddr*)&connecting_addr, &addrlen);
+			uint16_t opcode;
+			memcpy(&opcode, buffer, sizeof(opcode));
+			opcode = ntohs(opcode);
+			printf("Code %d\n", opcode);
+			close(sd);
 				
 		}
 
-		// !quit COMMAND
+		// !quit 
 		if(strcmp(command, quit_command) == 0){
 			break;
 		}
