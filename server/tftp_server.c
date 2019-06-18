@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #define DATA_LENGTH 512
-#define BUF_LEN 516 // Data length + 4 bytes 
+#define BUF_LEN 516
 #define FILENAME_SIZE 100
 #define MODE_SIZE 10
 
@@ -29,6 +29,7 @@
 #define CYN   "\x1B[36m"
 #define RESET "\x1B[0m"
 
+#define MIN(a,b) ((a) < (b) ? a : b)
 
 
 struct DataPacket {
@@ -73,8 +74,12 @@ void sendError(int sd, const char* errMessage, int errNumber, struct sockaddr_in
 void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr) 
 {
 	FILE *fptr;
+	DataPacket dataPacket;
 	char path[1000];
+	char buffer[DATA_LENGTH];
 	char file[FILENAME_SIZE];
+	int fileSize, numberOfPackets, remainingBytes;
+	socklen_t len;
 	const char* typeOfFile = strcmp(request->mode, "netascii") == 0 ? "r" : "rb";
 
 	strcpy(file, request->filename);
@@ -85,12 +90,55 @@ void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr)
 	strcat(path, file);
 	fptr = fopen(path, typeOfFile);
 
-	if(fptr == NULL) {
+	if (fptr == NULL) {
 		sendError(sd, "File non esistente", ERR_FILE_NOT_FOUND, client_addr);
 		fclose(fptr);
 		exit(1);
 	}
 
+	fseek(fptr,0,SEEK_END);
+	fileSize=ftell(fptr);
+	remainingBytes = fileSize;
+	fseek(fptr,0,SEEK_SET);
+	numberOfPackets = fileSize/DATA_LENGTH + 1;
+
+	for (int i = 0; i < numberOfPackets; ++i) {
+
+		int dataLength = MIN(DATA_LENGTH, remainingBytes);
+	
+		dataPacket.opcode = htons(DTA);
+		dataPacket.blockNumber = htons(i);
+		
+		if( dataLength != 0 ){
+			if( strcmp(typeOfFile, "rb") == 0 ) //modo binario
+				fread((void*)dataPacket.data, dataLength, 1, fptr);	
+			else if( strcmp(typeOfFile, "r") == 0 ){ //modo testuale
+				for (int j = 0; j < dataLength; ++j) {
+					dataPacket.data[j] = fgetc(fptr); 
+				}
+			}
+		} else{
+			strcpy(dataPacket.data,"");		
+		}
+
+		// Invio pacchetto
+		sendto(sd, (char*)&dataPacket, sizeof(dataPacket), 0 ,(struct sockaddr*)client_addr, sizeof(*client_addr));
+
+		// Attendo ACK
+		recvfrom(sd, buffer, DATA_LENGTH, 0, (struct sockaddr*)client_addr, &len);
+
+		/* Controllo che l'ACK sia quello corretto */
+		AckPacket* ackPacket = (AckPacket*) &buffer;
+		ackPacket->blockNumber = ntohs(ackPacket->blockNumber);
+		if(ackPacket->blockNumber != i) {
+			printf(RED "E' stato perso il pacchetto %d\n" RESET, i);
+		}
+				
+		remainingBytes -= dataLength;	
+	}
+	fclose(fptr);
+	close(sd);
+	printf(GRN "Inviati %d/%d pacchetti\n" RESET, numberOfPackets, numberOfPackets);
 }
 
 void handleRequest(RequestPacket* request, struct sockaddr_in* client_addr)
