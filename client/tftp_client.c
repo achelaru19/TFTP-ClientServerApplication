@@ -9,8 +9,7 @@
 #include "global_variables.h"
 
 
-#define PORT 7567
-
+#define PORT 7561
 
 
 struct DataPacket {
@@ -39,11 +38,6 @@ struct RequestPacket{
 	uint8_t zeroByteMode;
 };
 
-struct client_request {
-	char * filename;
-	char * localname;
-	uint8_t mode;
-};
 
 void printCommandList()
 {
@@ -58,6 +52,10 @@ void printCommandList()
 	printf(" --> termina il client\n");
 }
 
+const char* getTransferMode(RequestPacket req)
+{
+	return strcmp(req.mode, "octet") == 0 ? "wb" : "w";
+}
 
 bool startsWith(const char *str, const char *pre)
 {
@@ -81,28 +79,83 @@ int getWordCount(const char * command)
 	return count;
 }
 
-void sendFileRequest(client_request cl, int sd, sockaddr_in srv_addr) 
-{
-	
+void sendFileRequest(RequestPacket request, int sd, sockaddr_in srv_addr) 
+{	
 	int ret;
 
-	const char* mode = (cl.mode == TXTMODE) ? "netascii" : "octet";
-	
-	RequestPacket request;
-
 	request.opcode = htons(RRW);
-
-	strcpy(request.filename, cl.filename);
-	strcpy(request.mode, mode);
 	request.zeroByteCode = 0x00;
 	request.zeroByteMode = 0x00;
-
-	ret = sendto(sd, (char*) &request, sizeof(request), 0,
-            (struct sockaddr*)&srv_addr, sizeof(srv_addr));
-	printf("Blocco inviato\n");
-
+	do {
+		ret = sendto(sd, (char*) &request, sizeof(request), 0,
+		        (struct sockaddr*)&srv_addr, sizeof(srv_addr));
+		if(ret < 0) sleep(5);
+	} while (ret < 0);
+	printf(GRN "Richiesta del file %s inviata\n" RESET, request.filename);
 }
 
+void receiveAndaSaveFile(int sd, struct sockaddr_in* srv_addr, char* localFilename, const char* transferMode)
+{
+	char buffer[BUF_LEN];
+	DataPacket* dataPacket;
+	AckPacket ackPacket;
+	ErrorPacket* errorPacket;
+	FILE* fptr;
+	int ret, messageLen;
+	socklen_t len;
+	fptr = fopen(localFilename, transferMode);
+
+	printf("%s %s\n", localFilename, transferMode);
+
+	while(true) {
+		printf("loop while \n");
+		do {
+			ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*) srv_addr, &len);
+			if (ret < 0) {
+				sleep(5);
+			}
+		} while (ret < 0);
+		dataPacket = (DataPacket*) buffer;
+		printf("Qua entrato => %s\n", dataPacket->data);
+		if(ntohs(dataPacket->opcode) == ERR){
+			errorPacket = (ErrorPacket*) buffer;
+			printf(RED "Errore numero %d: %s\n" RESET, ntohs(errorPacket->errorNumber), errorPacket->errorMessage);
+			break;
+		}
+
+		messageLen = ret - 4;
+		printf("messagelen %d\n%s \n", messageLen, dataPacket->data);
+
+		if( strcmp(transferMode, "wb") == 0 ) // modalita' di trasferimento binaria
+			fwrite((void*)dataPacket->data, messageLen, 1, fptr);
+		else if( strcmp(transferMode, "w") == 0 ){ // modalita' di trasferimentotesto testuale
+			for(int j = 0; j < messageLen; ++j) {
+				fputc(dataPacket->data[j], fptr); 				
+			}	
+		}
+
+		/* Invio ACK */
+
+		ackPacket.opcode = htons(ACK);
+		ackPacket.blockNumber = dataPacket->blockNumber; 
+		printf("Sto per mandare ack\n");
+		do {
+			ret = sendto(sd, (char*) &ackPacket, sizeof(ackPacket), 0, (struct sockaddr*) srv_addr, sizeof(*srv_addr));
+			if(ret < 0) sleep(5);
+		} while (ret < 0);
+		printf("ACK inviato\n");
+
+		/* Controllo se sono all'ultimo blocco trasferito */
+		printf("messLen %d \n", messageLen);
+		if(messageLen < DATA_LENGTH){
+			printf(GRN "Download file %s completato\n" RESET, localFilename);
+ 			break;
+		}
+
+	}
+	fclose(fptr);
+	close(sd);
+}
 
 int main(int argc, char* argv[])
 {
@@ -119,36 +172,10 @@ int main(int argc, char* argv[])
     struct sockaddr_in srv_addr, my_addr;
 	struct sockaddr_in connecting_addr;
 	socklen_t addrlen; 
-    
-	// Pulizia
-	memset(&srv_addr, 0, sizeof(srv_addr));
-    memset(&my_addr, 0, sizeof(my_addr)); 
-	memset(&connecting_addr, 0, sizeof(connecting_addr));
+
 
     /* Creazione socket */
     sd = socket(AF_INET,SOCK_DGRAM,0);
-    
-    /* Creazione indirizzo di bind */
-    my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(PORT);
-    my_addr.sin_addr.s_addr = INADDR_ANY;
-
-
-    ret = bind(sd, (struct sockaddr*)&my_addr, sizeof(my_addr) );
-    
-    if( ret < 0 ){
-        perror(RED "Bind non riuscita\n" RESET);
-        exit(0);
-    }
-    
-    
-    /* Creazione indirizzo del server */
-    memset(&srv_addr, 0, sizeof(srv_addr)); // Pulizia 
-    srv_addr.sin_family = AF_INET;
-    srv_addr.sin_port = htons(porta_server);
-    inet_pton(AF_INET, ip_server, &srv_addr.sin_addr);
-
-
 
 	char command[COMMAND_LEN];
 
@@ -164,15 +191,18 @@ int main(int argc, char* argv[])
 	char get_command[COMMAND_LEN];
 	strcpy(get_command, "!get");
 
-	// Initialise client struct
-	client_request client;
-	client.mode = BINMODE;
-
+	// Initialise request
+	RequestPacket request;
+	strcpy(request.mode, "octet");
 
 	printCommandList();
 
-
 	while(true) {
+		/* Creazione indirizzo del server */
+		memset(&srv_addr, 0, sizeof(srv_addr)); // Pulizia 
+		srv_addr.sin_family = AF_INET;
+		srv_addr.sin_port = htons(porta_server);
+		inet_pton(AF_INET, ip_server, &srv_addr.sin_addr);
 
 		fgets(command, COMMAND_LEN, stdin);
 
@@ -198,16 +228,16 @@ int main(int argc, char* argv[])
 				words = strtok(NULL, " ");
 			}
 			if(strcmp(command_words[1], "txt\n") == 0){
-				client.mode = TXTMODE;
+				strcpy(request.mode, "netascii");
 				printf(GRN "Modo di trasferimento testuale configurato\n" RESET);
 				continue;
 
 			} else if (strcmp(command_words[1], "bin\n") == 0){
-				client.mode = BINMODE;
+				strcpy(request.mode, "octet");
 				printf(GRN "Modo di trasferimento binario configurato\n" RESET);
 				continue;
 			} else {
-				printf(RED "Invalid command\n" RESET);
+				printf(RED "Comando non valido\n" RESET);
 			}
 			
 			continue;
@@ -216,6 +246,7 @@ int main(int argc, char* argv[])
 		// !get 
 		if(startsWith(command, get_command)){
 			char* command_words[3];
+			char filename[100];
 			int index = 0;
 			int wordsCount = getWordCount(command);
 			if(wordsCount < 3){
@@ -228,24 +259,21 @@ int main(int argc, char* argv[])
 				index++;
 				words = strtok(NULL, " ");
 			}
-			client.filename = command_words[1];
-			client.localname = command_words[2];
-			sendFileRequest(client, sd, srv_addr);
-			char buffer[512];
-			ret = recvfrom(sd, buffer, 512, 0, (struct sockaddr*)&connecting_addr, &addrlen);
-			uint16_t opcode;
-			memcpy(&opcode, buffer, sizeof(opcode));
-			opcode = ntohs(opcode);
-			printf("Code %d\n", opcode); 
-			close(sd);
-				
+			strcpy(request.filename, command_words[1]);
+			sendFileRequest(request, sd, srv_addr);
+			strcpy(filename, command_words[2]);
+			filename[strlen(filename)-1] = '\0';
+			receiveAndaSaveFile(sd, &srv_addr, filename, getTransferMode(request));	
+			/* Reinitialise request for future requests */
+			memset(&request, 0, sizeof(request)); 
+			strcpy(request.mode, "octet");
 		}
 
 		// !quit 
 		if(strcmp(command, quit_command) == 0){
+			close(sd);
 			break;
 		}
-
 
 	}
 	return 0;

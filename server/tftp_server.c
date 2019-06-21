@@ -38,24 +38,31 @@ struct RequestPacket{
 void sendError(int sd, const char* errMessage, int errNumber, struct sockaddr_in* client_addr)
 {
 	ErrorPacket errorPacket;
+	int ret;
+	printf("Si e' verificato il seguente errore: %s \n", errMessage);
 	errorPacket.opcode = htons(ERR);
 	errorPacket.errorNumber = htons(errNumber);
 	strcpy(errorPacket.errorMessage, errMessage);
 	errorPacket.zeroByte = ZERO_BYTE;
-	sendto(sd, (char*) &errorPacket, sizeof(errorPacket), 0, (struct sockaddr*)client_addr, sizeof(*client_addr));
-	printf(YEL "Inviato messaggio di errore\n" RESET);
+	do {
+		ret = sendto(sd, (char*) &errorPacket, sizeof(errorPacket), 0, (struct sockaddr*)client_addr, sizeof(*client_addr));
+		if (ret) sleep(5);
+	} while (ret < 0);
+	printf(YEL "Inviato messaggio di errore: %s\n" RESET, errMessage);
 
 }
 
-void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr) 
+void sendFile(int sd, RequestPacket* request, sockaddr_in* client_addr) 
 {
+	printf("Inizio lettura file\n");
 	FILE *fptr;
 	DataPacket dataPacket;
 	char path[1000];
-	char buffer[DATA_LENGTH];
+	char buffer[BUF_LEN];
 	char file[FILENAME_SIZE];
 	int fileSize, numberOfPackets, remainingBytes;
 	socklen_t len;
+	int ret;
 	const char* typeOfFile = strcmp(request->mode, "netascii") == 0 ? "r" : "rb";
 
 	strcpy(file, request->filename);
@@ -64,6 +71,9 @@ void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr)
 	strcpy(path, "./files/");
 
 	strcat(path, file);
+
+	printf("%s %s \n", path, typeOfFile);
+
 	fptr = fopen(path, typeOfFile);
 
 	if (fptr == NULL) {
@@ -73,22 +83,29 @@ void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr)
 	}
 
 	fseek(fptr,0,SEEK_END);
-	fileSize=ftell(fptr);
+	printf("primo test'm\n");
+	fileSize = ftell(fptr);
 	remainingBytes = fileSize;
-	fseek(fptr,0,SEEK_SET);
-	numberOfPackets = fileSize/DATA_LENGTH + 1;
+	fseek(fptr, 0, SEEK_SET);
+
+	numberOfPackets = (fileSize/DATA_LENGTH) + 1;
+
+	printf("numr di pacchetti da inviare %d\n", numberOfPackets);
 
 	for (int i = 0; i < numberOfPackets; ++i) {
-
+		struct sockaddr_in cl;
+		printf("Nel for i %d\n", i);
 		int dataLength = MIN(DATA_LENGTH, remainingBytes);
+		printf("data legth %d \n", dataLength);
 	
 		dataPacket.opcode = htons(DTA);
 		dataPacket.blockNumber = htons(i);
+		memset(&dataPacket.data, 0, DATA_LENGTH);
 		
-		if( dataLength != 0 ){
-			if( strcmp(typeOfFile, "rb") == 0 ) //modo binario
+		if ( dataLength != 0 ){
+			if ( strcmp(typeOfFile, "rb") == 0 ) //modo binario
 				fread((void*)dataPacket.data, dataLength, 1, fptr);	
-			else if( strcmp(typeOfFile, "r") == 0 ){ //modo testuale
+			else if ( strcmp(typeOfFile, "r") == 0 ){ //modo testuale
 				for (int j = 0; j < dataLength; ++j) {
 					dataPacket.data[j] = fgetc(fptr); 
 				}
@@ -98,18 +115,26 @@ void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr)
 		}
 
 		// Invio pacchetto
-		sendto(sd, (char*)&dataPacket, sizeof(dataPacket), 0 ,(struct sockaddr*)client_addr, sizeof(*client_addr));
+		do {
+			ret = sendto(sd, (char*)&dataPacket, dataLength+4, 0 ,(struct sockaddr*)client_addr, sizeof(*client_addr));
+			if (ret) sleep(5);
+		} while (ret < 0);
+		
+		printf("Attendo ack\n");
+		// Attendo ACK 
 
-		// Attendo ACK
-		recvfrom(sd, buffer, DATA_LENGTH, 0, (struct sockaddr*)client_addr, &len);
+		do {
+			ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*)&cl, &len);
+			if (ret) {
+				sleep(5);
+			}
+		} while (ret < 0);
+		printf("Ricevuto messaggio ACK\n"); 
 
 		/* Controllo che l'ACK sia quello corretto */
+
 		AckPacket* ackPacket = (AckPacket*) &buffer;
-		ackPacket->blockNumber = ntohs(ackPacket->blockNumber);
-		if(ackPacket->blockNumber != i) {
-			printf(RED "E' stato perso il pacchetto %d\n" RESET, i);
-		}
-				
+			
 		remainingBytes -= dataLength;	
 	}
 	fclose(fptr);
@@ -119,8 +144,9 @@ void sendFile(int sd, RequestPacket* request, struct sockaddr_in* client_addr)
 
 void handleRequest(RequestPacket* request, struct sockaddr_in* client_addr)
 {
-	int sock = socket(AF_INET,SOCK_DGRAM,0);
-
+	int sock = socket(AF_INET, SOCK_DGRAM,0);
+	printf("Creato altro socket %d\n", sock);
+	printf(BLU "Richiesta del file %s ricevuta\n" RESET, request->filename);
 	request->opcode = ntohs(request->opcode);
 	switch (request->opcode) {
 		case RRQ: sendFile(sock, request, client_addr);
@@ -138,7 +164,7 @@ int main(int argc, char* argv[])
 	char* directory;
     struct sockaddr_in my_addr;
     
-	if(argc < 3) {
+	if (argc < 3) {
 		printf(RED "Errore: argomenti non sufficienti\n" RESET);
 		exit(2);
 	}
@@ -151,7 +177,7 @@ int main(int argc, char* argv[])
 
     /* Creazione socket */
     sd = socket(AF_INET,SOCK_DGRAM,0);
-	printf(BLU "Creato socket di ascolto\n" RESET);
+	printf(BLU "Creato socket di ascolto %d\n" RESET, sd);
     
     /* Creazione indirizzo di bind */
     my_addr.sin_family = AF_INET;
@@ -160,39 +186,39 @@ int main(int argc, char* argv[])
     
     ret = bind(sd, (struct sockaddr*)&my_addr, sizeof(my_addr) );
     
-    if( ret < 0 ){
+    if ( ret < 0 ) {
         perror(RED "Bind non riuscita\n" RESET);
         exit(1);
     }
 
-	while(true) {
+	while (true) {
 		struct sockaddr_in connecting_addr;
 		char buffer[BUF_LEN];
     	pid_t pid;
-		socklen_t len = sizeof(connecting_addr);
-
+		socklen_t len;
 		/* Pulizia */
-    	memset(&connecting_addr, 0, len);
+    	memset(&connecting_addr, 0, sizeof(connecting_addr));
 		memset(&buffer, 0, sizeof(buffer));
 		
-		ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*)&connecting_addr, &len);
-		if (ret < 0) {
-			perror(RED "Errore nella ricezione del messaggio\n" RESET);
-			continue;
-		} else if (ret == 0) {
-			perror(RED "Il socket remoto si e' chiuso\n'" RESET);
-			continue;
-		}
-		printf(BLU "Richiesta ricevuta\n" RESET);
+		do {
+			ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*)&connecting_addr, &len);
+			if (ret < 0) {
+				sleep(5);
+			}
+		} while (ret < 0);
 
 		pid = fork();
-
-		if (pid == 0) {
-			handleRequest((RequestPacket*)&buffer, &connecting_addr);
-		} 
-		else if (pid < 0) {
+		if (pid < 0) {
 			perror(RED "Errore nella creazione di un nuovo processo\n" RESET);
 		}
+		else if (pid == 0) {
+			handleRequest((RequestPacket*)&buffer, &connecting_addr);
+			exit(0);
+		} 
+		else {
+			sleep(5);
+		}
+
 	}
 
     close(sd);
