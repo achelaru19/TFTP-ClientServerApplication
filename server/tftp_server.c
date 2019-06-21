@@ -122,7 +122,7 @@ void sendFile(int sd, RequestPacket* request, sockaddr_in* client_addr)
 		
 		printf("Attendo ack\n");
 		// Attendo ACK 
-
+/*
 		do {
 			ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*)&cl, &len);
 			if (ret) {
@@ -130,7 +130,7 @@ void sendFile(int sd, RequestPacket* request, sockaddr_in* client_addr)
 			}
 		} while (ret < 0);
 		printf("Ricevuto messaggio ACK\n"); 
-
+*/
 		/* Controllo che l'ACK sia quello corretto */
 
 		AckPacket* ackPacket = (AckPacket*) &buffer;

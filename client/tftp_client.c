@@ -105,10 +105,7 @@ void receiveAndaSaveFile(int sd, struct sockaddr_in* srv_addr, char* localFilena
 	socklen_t len;
 	fptr = fopen(localFilename, transferMode);
 
-	printf("%s %s\n", localFilename, transferMode);
-
 	while(true) {
-		printf("loop while \n");
 		do {
 			ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*) srv_addr, &len);
 			if (ret < 0) {
@@ -116,7 +113,6 @@ void receiveAndaSaveFile(int sd, struct sockaddr_in* srv_addr, char* localFilena
 			}
 		} while (ret < 0);
 		dataPacket = (DataPacket*) buffer;
-		printf("Qua entrato => %s\n", dataPacket->data);
 		if(ntohs(dataPacket->opcode) == ERR){
 			errorPacket = (ErrorPacket*) buffer;
 			printf(RED "Errore numero %d: %s\n" RESET, ntohs(errorPacket->errorNumber), errorPacket->errorMessage);
@@ -124,7 +120,6 @@ void receiveAndaSaveFile(int sd, struct sockaddr_in* srv_addr, char* localFilena
 		}
 
 		messageLen = ret - 4;
-		printf("messagelen %d\n%s \n", messageLen, dataPacket->data);
 
 		if( strcmp(transferMode, "wb") == 0 ) // modalita' di trasferimento binaria
 			fwrite((void*)dataPacket->data, messageLen, 1, fptr);
@@ -138,15 +133,14 @@ void receiveAndaSaveFile(int sd, struct sockaddr_in* srv_addr, char* localFilena
 
 		ackPacket.opcode = htons(ACK);
 		ackPacket.blockNumber = dataPacket->blockNumber; 
-		printf("Sto per mandare ack\n");
+/*		printf("Sto per mandare ack\n");
 		do {
-			ret = sendto(sd, (char*) &ackPacket, sizeof(ackPacket), 0, (struct sockaddr*) srv_addr, sizeof(*srv_addr));
+			ret = sendto(sd, (char*) &ackPacket, sizeof(ackPacket), 0, (struct sockaddr*) srv_addr, len);
 			if(ret < 0) sleep(5);
 		} while (ret < 0);
 		printf("ACK inviato\n");
-
+*/
 		/* Controllo se sono all'ultimo blocco trasferito */
-		printf("messLen %d \n", messageLen);
 		if(messageLen < DATA_LENGTH){
 			printf(GRN "Download file %s completato\n" RESET, localFilename);
  			break;
