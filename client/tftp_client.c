@@ -1,3 +1,9 @@
+/**
+	Progetto Reti Informatiche 2019
+	Client TFTP
+	Angel Chelaru
+*/
+
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -8,10 +14,7 @@
 #include <unistd.h>
 #include "global_variables.h"
 
-
-#define PORT 7561
-
-
+// Strutture dati per i pacchetti
 struct DataPacket {
 	uint16_t opcode;
 	uint16_t blockNumber;
@@ -52,7 +55,7 @@ void printCommandList()
 	printf(" --> termina il client\n");
 }
 
-const char* getTransferMode(RequestPacket req)
+const char* getTransferMode(struct RequestPacket req)
 {
 	return strcmp(req.mode, "octet") == 0 ? "wb" : "w";
 }
@@ -64,13 +67,13 @@ bool startsWith(const char *str, const char *pre)
 
 int getWordCount(const char * command) 
 {
-	int count = 0;
+	int i, count = 0;
 	int len = strlen(command);
 	char previousChar;
 	if(len > 0) {
         previousChar = command[0];
     }
-	for(int i = 0; i <= len; ++i) {
+	for(i = 0; i <= len; ++i) {
 		if((command[i] == ' ' || command[i] == '\0') && previousChar != ' '){
 			count++;
 		}
@@ -79,207 +82,213 @@ int getWordCount(const char * command)
 	return count;
 }
 
-void sendFileRequest(RequestPacket request, int sd, sockaddr_in srv_addr) 
-{	
-	int ret;
-
-	request.opcode = htons(RRW);
-	request.zeroByteCode = 0x00;
-	request.zeroByteMode = 0x00;
-	do {
-		ret = sendto(sd, (char*) &request, sizeof(request), 0,
-		        (struct sockaddr*)&srv_addr, sizeof(srv_addr));
-		if(ret < 0) sleep(5);
-	} while (ret < 0);
-	printf(GRN "Richiesta del file %s inviata\n" RESET, request.filename);
+void printInvalidCommand()
+{
+	printf(YEL "Comando non valido. Usare il comando !help per ottenere la lista dei comandi validi\n" RESET);
 }
 
-void receiveAndaSaveFile(int sd, struct sockaddr_in* srv_addr, char* localFilename, const char* transferMode)
+int getCommandCode(char* command)
 {
-	char buffer[BUF_LEN];
-	DataPacket* dataPacket;
-	AckPacket ackPacket;
-	ErrorPacket* errorPacket;
-	FILE* fptr;
-	int ret, messageLen;
-	socklen_t len;
-	fptr = fopen(localFilename, transferMode);
+	if(strcmp(command, "!help\n") == 0) return HELP_COMMAND;
+	if(strcmp(command, "!quit\n") == 0) return QUIT_COMMAND;
+	if(startsWith(command, "!get ")) return GET_COMMAND;
+	if(startsWith(command, "!mode ")) return MODE_COMMAND;
+	return -1; // Commando non valido
+}
 
-	while(true) {
-		do {
-			ret = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*) srv_addr, &len);
-			if (ret < 0) {
-				sleep(5);
-			}
-		} while (ret < 0);
-		dataPacket = (DataPacket*) buffer;
+void setMode(struct RequestPacket* request, char* command)
+{
+	char* command_words[2];
+	int index = 0;
+	int wordsCount = getWordCount(command);
+	if(wordsCount < 2){
+		printInvalidCommand();
+		return;
+	}
+	char* words = strtok(command, " ");
+	while(words != NULL){
+		command_words[index] = words;
+		index++;
+		words = strtok(NULL, " ");
+	}
+	if(strcmp(command_words[1], "txt\n") == 0){
+		strcpy(request->mode, "netascii");
+		printf(GRN "Modo di trasferimento testuale configurato\n" RESET);
+	} else if (strcmp(command_words[1], "bin\n") == 0){
+		strcpy(request->mode, "octet");
+		printf(GRN "Modo di trasferimento binario configurato\n" RESET);
+	} else {
+		printInvalidCommand();
+	}
+}
+
+void sendFileRequest(struct RequestPacket* request, int sd, struct sockaddr_in* srv_addr) 
+{	
+	int ret;
+	request->opcode = htons(RRW);
+	request->zeroByteCode = 0x00;
+	request->zeroByteMode = 0x00;
+	ret = sendto(sd, (char*) request, sizeof(*request), 0,
+	        (struct sockaddr*) srv_addr, sizeof(*srv_addr));
+	if(ret < 0)  {
+		printf(RED "Errore nell'invio della richiesta \n"RESET);
+		exit(1);
+	}
+	printf(BLU "Richiesta del file %s inviata\n" RESET, request->filename);
+}
+
+void receiveAndSaveFile(int sd, char* localFilename, const char* transferMode)
+{
+	struct DataPacket* dataPacket;
+	struct ErrorPacket* errorPacket;
+	struct AckPacket ackPacket;
+	FILE* fptr;
+	char buffer[BUF_LEN];
+	int packetLength, messageLength, ret;
+	struct sockaddr_in srv_addr;
+	socklen_t len;
+
+	// Creo file se non esiste, altrimenti lo sovrascrivo
+	fptr = fopen(localFilename, transferMode);
+	
+	// Pulizia
+	memset(&srv_addr, 0, sizeof(srv_addr));
+
+	while (1) {
+		len = sizeof(srv_addr);
+		packetLength = recvfrom(sd, buffer, BUF_LEN, 0, (struct sockaddr*) &srv_addr, &len);
+		if (packetLength < 0) {
+			printf(RED "Errore nella ricezione del pacchetto\n" RESET);
+		}
+
+		dataPacket = (struct DataPacket*) buffer;
 		if(ntohs(dataPacket->opcode) == ERR){
-			errorPacket = (ErrorPacket*) buffer;
-			printf(RED "Errore numero %d: %s\n" RESET, ntohs(errorPacket->errorNumber), errorPacket->errorMessage);
+			errorPacket = (struct ErrorPacket*) buffer;
+			printf(RED "Errore con codice %d: %s\n" RESET, ntohs(errorPacket->errorNumber), errorPacket->errorMessage);
 			break;
 		}
 
-		messageLen = ret - 4;
+		// Inizializzo messageLength come packetLength meno i byte usati per l'intestazione
+		messageLength = packetLength - 4;
 
 		if( strcmp(transferMode, "wb") == 0 ) // modalita' di trasferimento binaria
-			fwrite((void*)dataPacket->data, messageLen, 1, fptr);
+			fwrite((void*)dataPacket->data, messageLength, 1, fptr);
 		else if( strcmp(transferMode, "w") == 0 ){ // modalita' di trasferimentotesto testuale
-			for(int j = 0; j < messageLen; ++j) {
+			int j;
+			for (j = 0; j < messageLength; ++j) {
 				fputc(dataPacket->data[j], fptr); 				
 			}	
 		}
 
-		/* Invio ACK */
-
+		// Invio ACK 
 		ackPacket.opcode = htons(ACK);
 		ackPacket.blockNumber = dataPacket->blockNumber; 
-/*		printf("Sto per mandare ack\n");
-		do {
-			ret = sendto(sd, (char*) &ackPacket, sizeof(ackPacket), 0, (struct sockaddr*) srv_addr, len);
-			if(ret < 0) sleep(5);
-		} while (ret < 0);
-		printf("ACK inviato\n");
-*/
-		/* Controllo se sono all'ultimo blocco trasferito */
-		if(messageLen < DATA_LENGTH){
-			printf(GRN "Download file %s completato\n" RESET, localFilename);
- 			break;
+		ret = sendto(sd, (char*)&ackPacket, sizeof(ackPacket), 0, (struct sockaddr*) &srv_addr, len);
+		if (ret < 0) {
+			printf(YEL "Errore nell'invio dell'ACK\n" RESET);
 		}
 
+		// Controllo se sono all'ultimo blocco trasferito 
+		if (messageLength < DATA_LENGTH) {
+			printf(GRN "Download file %s completato\n" RESET, localFilename);
+			printf(BLU "Il file e' stato salvato\n" RESET);
+ 			break;
+		}
 	}
 	fclose(fptr);
-	close(sd);
+}
+
+void handleGetRequest(int sd, struct RequestPacket* request, char* command, struct sockaddr_in* srv_addr)
+{
+	char* command_words[3];
+	char filename[FILENAME_SIZE];
+
+	// Estrai filename e local filename dal comando
+	int index = 0;
+	int wordsCount = getWordCount(command);
+	if(wordsCount < 3){
+		printInvalidCommand();
+		return;
+	}
+	char* words = strtok(command, " ");
+	while(words != NULL){
+		command_words[index] = words;
+		index++;
+		words = strtok(NULL, " ");
+	}
+
+	strcpy(request->filename, command_words[1]);
+
+	// Invia richiesta del file
+	sendFileRequest(request, sd, srv_addr);
+
+	strcpy(filename, command_words[2]);
+	filename[strlen(filename)-1] = '\0';
+	// Ricevi il file
+	receiveAndSaveFile(sd, filename, getTransferMode(*request));	
+
+	// Reinizializza request per richieste future 
+	memset(request, 0, sizeof(*request)); 
+	strcpy(request->mode, "octet");
 }
 
 int main(int argc, char* argv[])
 {
-	// Check number of arguments
+	
+    int sd, porta_server, commandCode;
+    struct sockaddr_in srv_addr;
+	struct RequestPacket request;
+
+	// Controllo il numero di argomenti
 	if(argc < 3) {
 		printf(RED "Errore: il numero di argomenti non e' sufficiente.\n" RESET);
-		return -1;
+		exit(-1);
 	}
 
 	const char* ip_server = argv[1];
-	int porta_server = atoi(argv[2]);
+	porta_server = atoi(argv[2]);
 	
-    int ret, sd, len;
-    struct sockaddr_in srv_addr, my_addr;
-	struct sockaddr_in connecting_addr;
-	socklen_t addrlen; 
-
-
-    /* Creazione socket */
+    // Creazione socket 
     sd = socket(AF_INET,SOCK_DGRAM,0);
+
+	// Creazione indirizzo del server 
+	memset(&srv_addr, 0, sizeof(srv_addr)); // Pulizia 
+	srv_addr.sin_family = AF_INET;
+	srv_addr.sin_port = htons(porta_server);
+	inet_pton(AF_INET, ip_server, &srv_addr.sin_addr);
 
 	char command[COMMAND_LEN];
 
-	char help_command[COMMAND_LEN];
-	strcpy(help_command, "!help\n");
-
-	char quit_command[COMMAND_LEN];
-	strcpy(quit_command, "!quit\n");
-
-	char mode_command[COMMAND_LEN];
-	strcpy(mode_command, "!mode");
-
-	char get_command[COMMAND_LEN];
-	strcpy(get_command, "!get");
-
-	// Initialise request
-	RequestPacket request;
+	// Inizializza request
 	strcpy(request.mode, "octet");
 
 	printCommandList();
 
-	while(true) {
-		/* Creazione indirizzo del server */
-		memset(&srv_addr, 0, sizeof(srv_addr)); // Pulizia 
-		srv_addr.sin_family = AF_INET;
-		srv_addr.sin_port = htons(porta_server);
-		inet_pton(AF_INET, ip_server, &srv_addr.sin_addr);
-
+	while (true) {
+		printf("Inserisci il comando\n");
+		printf(BLU ">" RESET);
 		fgets(command, COMMAND_LEN, stdin);
 
-		// !help 
-		if(strcmp(command, help_command) == 0) {
-			printCommandList();
-			continue;
+		commandCode = getCommandCode(command);
+
+		switch (commandCode) {
+			case HELP_COMMAND:
+				printCommandList();
+				break;
+			case MODE_COMMAND:
+				setMode(&request, command);
+				break;
+			case GET_COMMAND:
+				handleGetRequest(sd, &request, command, &srv_addr);
+				break;
+			case QUIT_COMMAND:
+				printf(YEL "Ciao! Al prossimo download!\n" RESET);
+				close(sd);
+				return 0;
+			default:
+				printInvalidCommand();
 		}
-
-		// !mode 
-		if(startsWith(command, mode_command)){
-			char* command_words[2];
-			int index = 0;
-			int wordsCount = getWordCount(command);
-			if(wordsCount < 2){
-				printf(RED "Errore: non ci sono abbastanza argomenti\n" RESET);
-				continue;
-			}
-			char* words = strtok(command, " ");
-			while(words != NULL){
-				command_words[index] = words;
-				index++;
-				words = strtok(NULL, " ");
-			}
-			if(strcmp(command_words[1], "txt\n") == 0){
-				strcpy(request.mode, "netascii");
-				printf(GRN "Modo di trasferimento testuale configurato\n" RESET);
-				continue;
-
-			} else if (strcmp(command_words[1], "bin\n") == 0){
-				strcpy(request.mode, "octet");
-				printf(GRN "Modo di trasferimento binario configurato\n" RESET);
-				continue;
-			} else {
-				printf(RED "Comando non valido\n" RESET);
-			}
-			
-			continue;
-		}
-
-		// !get 
-		if(startsWith(command, get_command)){
-			char* command_words[3];
-			char filename[100];
-			int index = 0;
-			int wordsCount = getWordCount(command);
-			if(wordsCount < 3){
-				printf(RED "Errore: non ci sono abbastanza argomenti\n" RESET);
-				continue;
-			}
-			char* words = strtok(command, " ");
-			while(words != NULL){
-				command_words[index] = words;
-				index++;
-				words = strtok(NULL, " ");
-			}
-			strcpy(request.filename, command_words[1]);
-			sendFileRequest(request, sd, srv_addr);
-			strcpy(filename, command_words[2]);
-			filename[strlen(filename)-1] = '\0';
-			receiveAndaSaveFile(sd, &srv_addr, filename, getTransferMode(request));	
-			/* Reinitialise request for future requests */
-			memset(&request, 0, sizeof(request)); 
-			strcpy(request.mode, "octet");
-		}
-
-		// !quit 
-		if(strcmp(command, quit_command) == 0){
-			close(sd);
-			break;
-		}
-
 	}
 	return 0;
 }
-
-
-
-
-
-
-
-
-
-
 
